@@ -1,0 +1,22 @@
+{
+  "name": "backend-inlislite",
+  "version": "1.0.0",
+  "description": "for add fitur inlislite ",
+  "license": "ISC",
+  "author": "indrakhucuy",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "dev" : "nodemon index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "mysql2": "^3.16.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}
