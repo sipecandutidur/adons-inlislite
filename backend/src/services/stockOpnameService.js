@@ -413,6 +413,25 @@ const getStatistics = async () => {
     };
 };
 
+// Get location stats from scanned items (active sessions only)
+const getLocationStats = async () => {
+    const query = `
+        SELECT 
+            i.location as locationName,
+            COUNT(*) as total
+        FROM stock_opname_items i
+        JOIN stock_opname_sessions s ON i.session_id = s.id
+        WHERE s.status = 'active'
+        AND i.location IS NOT NULL
+        AND i.location != ''
+        GROUP BY i.location
+        ORDER BY total DESC
+    `;
+    
+    const [rows] = await dbApp.query(query);
+    return rows;
+};
+
 module.exports = {
     createSession,
     checkDuplicate,
@@ -423,5 +442,6 @@ module.exports = {
     updateSession,
     deleteSession,
     getAllScannedItems,
-    getStatistics
+    getStatistics,
+    getLocationStats
 };

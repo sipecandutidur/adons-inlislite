@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Search, Package, Clock, CheckCircle, XCircle, AlertTriangle, FileSpreadsheet, X, Wrench, BookX, Eye } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { API_BASE_URL } from '../config/api.config';
+import { socket } from '../config/socket.config';
 
 interface BrokenBook {
   id: number;
@@ -121,19 +122,25 @@ const BrokenBook = () => {
     return () => clearTimeout(timer);
   }, [searchQuery, damageTypeFilter, actionStatusFilter]);
 
-  // Initial fetch and auto-refresh
+  // Initial fetch
   useEffect(() => {
     fetchStatistics();
-    fetchBrokenBooks();
+    fetchBrokenBooks(1, '', '', '');
+  }, []);
 
-    // Auto-refresh every 30 seconds
-    const interval = setInterval(() => {
+  // Setup Socket.IO listener for real-time updates
+  useEffect(() => {
+    const handleUpdate = () => {
       fetchStatistics();
       fetchBrokenBooks(currentPage, searchQuery, damageTypeFilter, actionStatusFilter);
-    }, 30000);
+    };
 
-    return () => clearInterval(interval);
-  }, []);
+    socket.on('BROKEN_BOOK_UPDATED', handleUpdate);
+
+    return () => {
+      socket.off('BROKEN_BOOK_UPDATED', handleUpdate);
+    };
+  }, [currentPage, searchQuery, damageTypeFilter, actionStatusFilter]);
 
   // Update action
   const handleUpdateAction = async () => {

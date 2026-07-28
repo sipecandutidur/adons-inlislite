@@ -21,6 +21,10 @@ const createRental = async (req, res) => {
             notes
         });
 
+        if (req.app.get('io')) {
+            req.app.get('io').emit('RENT_COMPUTER_UPDATED');
+        }
+
         res.status(201).json({
             success: true,
             message: 'Rental created successfully',
@@ -61,6 +65,10 @@ const completeRental = async (req, res) => {
             });
         }
 
+        if (req.app.get('io')) {
+            req.app.get('io').emit('RENT_COMPUTER_UPDATED');
+        }
+
         res.json({
             success: true,
             message: 'Rental completed successfully'
@@ -94,6 +102,9 @@ const extendRental = async (req, res) => {
         const success = await rentComputerService.extendRental(req.params.id, minutes);
         
         if (success) {
+            if (req.app.get('io')) {
+                req.app.get('io').emit('RENT_COMPUTER_UPDATED');
+            }
             res.json({
                 success: true,
                 message: 'Rental extended successfully'

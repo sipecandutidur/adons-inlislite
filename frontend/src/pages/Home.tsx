@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Search, Package, Clock, AlertTriangle, TrendingUp, FileSpreadsheet, X, Calendar, User } from 'lucide-react';
+import { Search, Package, Clock, AlertTriangle, TrendingUp, FileSpreadsheet, X, Calendar, User, ChevronDown, MapPin } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { API_BASE_URL } from '../config/api.config';
+import { socket } from '../config/socket.config';
 
 interface ScannedItem {
   id: number;
@@ -30,6 +31,12 @@ interface Statistics {
   itemsWithWarnings: number;
 }
 
+interface LocationStat {
+  locationId: number;
+  locationName: string;
+  total: number;
+}
+
 const Home = () => {
   const [scannedItems, setScannedItems] = useState<ScannedItem[]>([]);
   const [statistics, setStatistics] = useState<Statistics>({
@@ -39,11 +46,14 @@ const Home = () => {
     itemsWithWarnings: 0
   });
   const [searchQuery, setSearchQuery] = useState('');
+  const [locationStats, setLocationStats] = useState<LocationStat[]>([]);
+  const [isLoadingLocationStats, setIsLoadingLocationStats] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
-  const itemsPerPage = 50;
+  const [itemsPerPage, setItemsPerPage] = useState(20);
+  const limitOptions = [10, 20, 50, 100];
 
   // Fetch statistics
   const fetchStatistics = async () => {
@@ -56,6 +66,23 @@ const Home = () => {
       }
     } catch (error) {
       console.error('Error fetching statistics:', error);
+    }
+  };
+
+  // Fetch location stats
+  const fetchLocationStats = async () => {
+    try {
+      setIsLoadingLocationStats(true);
+      const response = await fetch(`${API_BASE_URL}/stock-opname/location-stats`);
+      const result = await response.json();
+
+      if (result.success) {
+        setLocationStats(result.data);
+      }
+    } catch (error) {
+      console.error('Error fetching location stats:', error);
+    } finally {
+      setIsLoadingLocationStats(false);
     }
   };
 
@@ -89,62 +116,101 @@ const Home = () => {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // Initial fetch and auto-refresh
+  // Refetch when itemsPerPage changes
+  useEffect(() => {
+    fetchScannedItems(1, searchQuery);
+  }, [itemsPerPage]);
+
+  // Initial fetch
   useEffect(() => {
     fetchStatistics();
-    fetchScannedItems();
-
-    // Auto-refresh every 30 seconds
-    const interval = setInterval(() => {
-      fetchStatistics();
-      fetchScannedItems(currentPage, searchQuery);
-    }, 30000);
-
-    return () => clearInterval(interval);
+    fetchLocationStats();
+    fetchScannedItems(1, '');
   }, []);
 
-  // Export to Excel
-  const exportToExcel = () => {
-    const worksheetData = [
-      ['LAPORAN SCAN HISTORY - STOCK OPNAME'],
-      [''],
-      ['Tanggal Export', new Date().toLocaleString('id-ID')],
-      ['Total Item', totalItems],
-      [''],
-      ['DAFTAR ITEM YANG DIPINDAI'],
-      ['No', 'Barcode', 'Judul', 'Pengarang', 'Call Number', 'Tahun', 'Lokasi', 'Status Buku', 'PIC', 'Session ID', 'Warning', 'Waktu Scan']
-    ];
+  // Setup Socket.IO listener for real-time updates
+  useEffect(() => {
+    const handleUpdate = () => {
+      fetchStatistics();
+      fetchLocationStats();
+      fetchScannedItems(currentPage, searchQuery);
+    };
 
-    scannedItems.forEach((item, index) => {
-      worksheetData.push([
-        (currentPage - 1) * itemsPerPage + index + 1,
-        item.barcode,
-        item.title,
-        item.author,
-        item.callNumber,
-        item.year,
-        item.location,
-        item.statusBuku,
-        item.picName,
-        item.sessionId,
-        item.hasWarning ? item.warningTypes.join(', ') : 'Tidak ada',
-        new Date(item.scannedAt).toLocaleString('id-ID')
-      ]);
-    });
+    socket.on('STOCK_OPNAME_UPDATED', handleUpdate);
 
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(worksheetData);
+    return () => {
+      socket.off('STOCK_OPNAME_UPDATED', handleUpdate);
+    };
+  }, [currentPage, searchQuery]);
 
-    ws['!cols'] = [
-      { wch: 5 }, { wch: 15 }, { wch: 40 }, { wch: 25 }, { wch: 15 },
-      { wch: 8 }, { wch: 20 }, { wch: 15 }, { wch: 20 }, { wch: 10 },
-      { wch: 20 }, { wch: 20 }
-    ];
+  const [isExporting, setIsExporting] = useState(false);
 
-    XLSX.utils.book_append_sheet(wb, ws, 'Scan History');
-    
-    const fileName = `Scan_History_${new Date().toISOString().split('T')[0]}.xlsx`;
-    XLSX.writeFile(wb, fileName);
+  // Export to Excel - fetches ALL data from API
+  const exportToExcel = async () => {
+    try {
+      setIsExporting(true);
+
+      // Fetch all items from dedicated export API (no pagination)
+      const url = `${API_BASE_URL}/stock-opname/items/export?search=${encodeURIComponent(searchQuery)}`;
+      const response = await fetch(url);
+      const result = await response.json();
+
+      if (!result.success || !result.data || result.data.length === 0) {
+        alert('Tidak ada data untuk di-export');
+        return;
+      }
+
+      const allItems: ScannedItem[] = result.data;
+
+      const worksheetData: any[][] = [
+        ['LAPORAN SCAN HISTORY - STOCK OPNAME'],
+        [''],
+        ['Tanggal Export', new Date().toLocaleString('id-ID')],
+        ['Total Item', allItems.length],
+        ...(searchQuery ? [['Filter', searchQuery]] : []),
+        [''],
+        ['DAFTAR ITEM YANG DIPINDAI'],
+        ['No', 'Barcode', 'Judul', 'Pengarang', 'Call Number', 'Tahun', 'Jenis Pengadaan', 'Sumber', 'Lokasi', 'Status Buku', 'PIC', 'Session ID', 'Warning', 'Waktu Scan']
+      ];
+
+      allItems.forEach((item, index) => {
+        worksheetData.push([
+          index + 1,
+          item.barcode,
+          item.title,
+          item.author,
+          item.callNumber,
+          item.year,
+          item.typeProcurement || '-',
+          item.source || '-',
+          item.location,
+          item.statusBuku,
+          item.picName,
+          item.sessionId,
+          item.hasWarning ? (item.warningTypes || []).join(', ') : 'Tidak ada',
+          new Date(item.scannedAt).toLocaleString('id-ID')
+        ]);
+      });
+
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(worksheetData);
+
+      ws['!cols'] = [
+        { wch: 5 }, { wch: 15 }, { wch: 40 }, { wch: 25 }, { wch: 15 },
+        { wch: 8 }, { wch: 20 }, { wch: 15 }, { wch: 20 }, { wch: 15 },
+        { wch: 20 }, { wch: 10 }, { wch: 25 }, { wch: 20 }
+      ];
+
+      XLSX.utils.book_append_sheet(wb, ws, 'Scan History');
+
+      const fileName = `Scan_History_${new Date().toISOString().split('T')[0]}.xlsx`;
+      XLSX.writeFile(wb, fileName);
+    } catch (error) {
+      console.error('Error exporting to Excel:', error);
+      alert('Gagal export data. Silakan coba lagi.');
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const statsCards = [
@@ -193,11 +259,11 @@ const Home = () => {
 
         {/* Statistics Dashboard */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          {statsCards.map((stat, index) => {
+          {statsCards.map((stat) => {
             const Icon = stat.icon;
             return (
               <div
-                key={index}
+                key={stat.title}
                 className={`bg-gradient-to-br ${stat.bgColor} border ${stat.borderColor} rounded-xl p-6 hover:scale-105 transition-all duration-300`}
               >
                 <div className="flex items-center justify-between mb-4">
@@ -211,6 +277,71 @@ const Home = () => {
               </div>
             );
           })}
+        </div>
+
+        {/* Location Distribution Cards */}
+        <div className="mb-8">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600">
+              <MapPin className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-white">Distribusi Koleksi Berdasarkan Lokasi</h2>
+              <p className="text-slate-400 text-sm">Jumlah buku hasil scan dari session aktif</p>
+            </div>
+          </div>
+
+          {isLoadingLocationStats ? (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="bg-slate-800/50 border border-slate-700 rounded-xl p-5 animate-pulse">
+                  <div className="h-4 bg-slate-700 rounded w-3/4 mb-3"></div>
+                  <div className="h-8 bg-slate-700 rounded w-1/2"></div>
+                </div>
+              ))}
+            </div>
+          ) : locationStats.length === 0 ? (
+            <div className="text-center py-8 bg-slate-800/30 border border-slate-700 rounded-xl">
+              <MapPin className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+              <p className="text-slate-400">Belum ada data lokasi</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              {locationStats.map((loc, index) => {
+                const gradients = [
+                  { bg: 'from-blue-500/15 to-cyan-500/15', border: 'border-blue-500/25', icon: 'from-blue-500 to-cyan-500', text: 'text-blue-400', glow: 'hover:shadow-blue-500/20' },
+                  { bg: 'from-violet-500/15 to-purple-500/15', border: 'border-violet-500/25', icon: 'from-violet-500 to-purple-500', text: 'text-violet-400', glow: 'hover:shadow-violet-500/20' },
+                  { bg: 'from-emerald-500/15 to-teal-500/15', border: 'border-emerald-500/25', icon: 'from-emerald-500 to-teal-500', text: 'text-emerald-400', glow: 'hover:shadow-emerald-500/20' },
+                  { bg: 'from-amber-500/15 to-orange-500/15', border: 'border-amber-500/25', icon: 'from-amber-500 to-orange-500', text: 'text-amber-400', glow: 'hover:shadow-amber-500/20' },
+                  { bg: 'from-rose-500/15 to-pink-500/15', border: 'border-rose-500/25', icon: 'from-rose-500 to-pink-500', text: 'text-rose-400', glow: 'hover:shadow-rose-500/20' },
+                  { bg: 'from-sky-500/15 to-indigo-500/15', border: 'border-sky-500/25', icon: 'from-sky-500 to-indigo-500', text: 'text-sky-400', glow: 'hover:shadow-sky-500/20' },
+                  { bg: 'from-lime-500/15 to-green-500/15', border: 'border-lime-500/25', icon: 'from-lime-500 to-green-500', text: 'text-lime-400', glow: 'hover:shadow-lime-500/20' },
+                  { bg: 'from-fuchsia-500/15 to-purple-500/15', border: 'border-fuchsia-500/25', icon: 'from-fuchsia-500 to-purple-500', text: 'text-fuchsia-400', glow: 'hover:shadow-fuchsia-500/20' },
+                ];
+                const style = gradients[index % gradients.length];
+
+                return (
+                  <div
+                    key={loc.locationId}
+                    className={`bg-gradient-to-br ${style.bg} border ${style.border} rounded-xl p-5 hover:scale-[1.03] transition-all duration-300 hover:shadow-lg ${style.glow} group cursor-default`}
+                  >
+                    <div className="flex items-start justify-between mb-3">
+                      <div className={`p-2 rounded-lg bg-gradient-to-br ${style.icon} shadow-lg`}>
+                        <MapPin className="w-4 h-4 text-white" />
+                      </div>
+                    </div>
+                    <p className="text-slate-300 text-sm font-medium mb-1 leading-tight truncate" title={loc.locationName}>
+                      {loc.locationName}
+                    </p>
+                    <p className={`text-2xl font-bold ${style.text}`}>
+                      {loc.total.toLocaleString()}
+                    </p>
+                    <p className="text-slate-500 text-xs mt-1">eksemplar</p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Search and Export Bar */}
@@ -234,13 +365,39 @@ const Home = () => {
                 </button>
               )}
             </div>
+            <div className="relative">
+              <select
+                value={itemsPerPage}
+                onChange={(e) => {
+                  setItemsPerPage(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+                className="appearance-none pl-4 pr-10 py-3 bg-slate-700/50 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all cursor-pointer"
+              >
+                {limitOptions.map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt} / page
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
+            </div>
             <button
               onClick={exportToExcel}
-              disabled={scannedItems.length === 0}
+              disabled={scannedItems.length === 0 || isExporting}
               className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 rounded-lg text-white hover:shadow-lg hover:shadow-green-500/50 transition-all duration-300 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <FileSpreadsheet className="w-5 h-5" />
-              Export to Excel
+              {isExporting ? (
+                <>
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                  Exporting...
+                </>
+              ) : (
+                <>
+                  <FileSpreadsheet className="w-5 h-5" />
+                  Export All to Excel
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -250,7 +407,7 @@ const Home = () => {
           <div className="p-6 border-b border-slate-700">
             <h2 className="text-2xl font-bold text-white">Scan History</h2>
             <p className="text-slate-400 text-sm mt-1">
-              Showing {scannedItems.length} of {totalItems} items
+              Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} items
               {searchQuery && ` (filtered by "${searchQuery}")`}
             </p>
           </div>
@@ -331,60 +488,76 @@ const Home = () => {
               </div>
 
               {/* Pagination */}
-              {totalPages > 1 && (
-                <div className="p-6 border-t border-slate-700 flex items-center justify-between">
-                  <div className="text-slate-400 text-sm">
-                    Page {currentPage} of {totalPages}
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => fetchScannedItems(currentPage - 1, searchQuery)}
-                      disabled={currentPage === 1}
-                      className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Previous
-                    </button>
-                    
-                    {/* Page numbers */}
-                    <div className="flex gap-1">
-                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                        let pageNum;
-                        if (totalPages <= 5) {
-                          pageNum = i + 1;
-                        } else if (currentPage <= 3) {
-                          pageNum = i + 1;
-                        } else if (currentPage >= totalPages - 2) {
-                          pageNum = totalPages - 4 + i;
-                        } else {
-                          pageNum = currentPage - 2 + i;
-                        }
-                        
-                        return (
-                          <button
-                            key={pageNum}
-                            onClick={() => fetchScannedItems(pageNum, searchQuery)}
-                            className={`px-3 py-2 rounded-lg text-sm transition-colors ${
-                              currentPage === pageNum
-                                ? 'bg-blue-600 text-white'
-                                : 'bg-slate-700 hover:bg-slate-600 text-white'
-                            }`}
-                          >
-                            {pageNum}
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    <button
-                      onClick={() => fetchScannedItems(currentPage + 1, searchQuery)}
-                      disabled={currentPage === totalPages}
-                      className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Next
-                    </button>
-                  </div>
+              <div className="p-6 border-t border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="text-slate-400 text-sm">
+                  Page {currentPage} of {totalPages} &middot; {totalItems} total items
                 </div>
-              )}
+                <div className="flex items-center gap-2">
+                  {/* First page */}
+                  <button
+                    onClick={() => fetchScannedItems(1, searchQuery)}
+                    disabled={currentPage === 1}
+                    className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="First Page"
+                  >
+                    «
+                  </button>
+                  <button
+                    onClick={() => fetchScannedItems(currentPage - 1, searchQuery)}
+                    disabled={currentPage === 1}
+                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Previous
+                  </button>
+                  
+                  {/* Page numbers */}
+                  <div className="flex gap-1">
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      let pageNum;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i;
+                      } else {
+                        pageNum = currentPage - 2 + i;
+                      }
+                      
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => fetchScannedItems(pageNum, searchQuery)}
+                          className={`px-3 py-2 rounded-lg text-sm transition-colors ${
+                            currentPage === pageNum
+                              ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30'
+                              : 'bg-slate-700 hover:bg-slate-600 text-white'
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    onClick={() => fetchScannedItems(currentPage + 1, searchQuery)}
+                    disabled={currentPage === totalPages}
+                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Next
+                  </button>
+                  {/* Last page */}
+                  <button
+                    onClick={() => fetchScannedItems(totalPages, searchQuery)}
+                    disabled={currentPage === totalPages}
+                    className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Last Page"
+                  >
+                    »
+                  </button>
+                </div>
+              </div>
             </>
           )}
         </div>

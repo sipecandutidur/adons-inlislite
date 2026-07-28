@@ -291,6 +291,7 @@ const BrokenBookScanner = () => {
 
                 <input
                   ref={barcodeInputRef}
+                  autoFocus
                   type="text"
                   placeholder="Scan barcode di sini..."
                   value={barcodeInput}

@@ -39,6 +39,10 @@ const reportBrokenBook = async (req, res) => {
             source
         });
         
+        if (req.app.get('io')) {
+            req.app.get('io').emit('BROKEN_BOOK_UPDATED');
+        }
+        
         res.status(201).json({
             success: true,
             message: 'Broken book reported successfully',
@@ -174,6 +178,10 @@ const updateAction = async (req, res) => {
                 success: false,
                 message: 'Broken book not found'
             });
+        }
+        
+        if (req.app.get('io')) {
+            req.app.get('io').emit('BROKEN_BOOK_UPDATED');
         }
         
         res.json({

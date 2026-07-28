@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Search, Monitor, User, RotateCcw, History, FileSpreadsheet, PlayCircle } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { API_BASE_URL } from '../config/api.config';
+import { socket } from '../config/socket.config';
 
 interface Member {
     MemberNo: string;
@@ -197,6 +198,23 @@ const RentComputer = () => {
         } else {
             fetchHistory();
         }
+    }, [activeTab]);
+
+    // Setup Socket.IO listener for real-time updates
+    useEffect(() => {
+        const handleUpdate = () => {
+            if (activeTab === 'rental') {
+                fetchActiveRentals();
+            } else {
+                fetchHistory();
+            }
+        };
+
+        socket.on('RENT_COMPUTER_UPDATED', handleUpdate);
+
+        return () => {
+            socket.off('RENT_COMPUTER_UPDATED', handleUpdate);
+        };
     }, [activeTab]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {

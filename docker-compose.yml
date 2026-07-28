@@ -1,0 +1,101 @@
+# ==========================================
+# Adons Inlislite - Full Stack Docker Compose
+# ==========================================
+# Usage:
+#   docker compose up -d          # Start semua services
+#   docker compose down           # Stop semua services
+#   docker compose logs -f        # Lihat logs
+#   docker compose up -d --build  # Rebuild & start
+# ==========================================
+
+services:
+  # ========================================
+  # MySQL Database (App Database)
+  # ========================================
+  mysql:
+    image: mysql:8.0
+    container_name: adons-inlislite-db
+    restart: always
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_APP_PASSWORD:-semak}
+      MYSQL_DATABASE: ${DB_APP_NAME:-alternative_inlislite}
+      TZ: Asia/Jakarta
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./init_database.sql:/docker-entrypoint-initdb.d/init_database.sql:ro
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_APP_PASSWORD:-semak}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ========================================
+  # Backend (Node.js + Express)
+  # ========================================
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: adons-inlislite-backend
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      TZ: Asia/Jakarta
+      FRONTEND_DIST_PATH: /app/public
+      # App Database
+      DB_APP_HOST: mysql
+      DB_APP_PORT: 3306
+      DB_APP_USER: root
+      DB_APP_PASSWORD: ${DB_APP_PASSWORD:-semak}
+      DB_APP_NAME: ${DB_APP_NAME:-alternative_inlislite}
+      # Inlislite Database (jaringan lokal)
+      DB_INLISLITE_HOST: ${DB_INLISLITE_HOST:-192.168.35.8}
+      DB_INLISLITE_PORT: ${DB_INLISLITE_PORT:-3309}
+      DB_INLISLITE_USER: ${DB_INLISLITE_USER}
+      DB_INLISLITE_PASSWORD: ${DB_INLISLITE_PASSWORD}
+      DB_INLISLITE_NAME: ${DB_INLISLITE_NAME:-inlislite_v31_depok}
+      # CORS
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  # ========================================
+  # Nginx (Reverse Proxy + HTTPS)
+  # ========================================
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: adons-inlislite-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+volumes:
+  mysql_data:
+    driver: local
+
+networks:
+  app-network:
+    driver: bridge

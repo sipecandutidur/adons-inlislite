@@ -34,6 +34,10 @@ const createSession = async (req, res) => {
             statusBuku
         });
         
+        if (req.app.get('io')) {
+            req.app.get('io').emit('STOCK_OPNAME_UPDATED');
+        }
+        
         res.status(201).json({
             success: true,
             message: 'Session created successfully',
@@ -95,6 +99,10 @@ const addItemToSession = async (req, res) => {
         }
         
         const item = await stockOpnameService.addItemToSession(sessionId, itemData);
+        
+        if (req.app.get('io')) {
+            req.app.get('io').emit('STOCK_OPNAME_UPDATED');
+        }
         
         res.status(201).json({
             success: true,
@@ -197,6 +205,10 @@ const updateSession = async (req, res) => {
             });
         }
         
+        if (req.app.get('io')) {
+            req.app.get('io').emit('STOCK_OPNAME_UPDATED');
+        }
+        
         res.json({
             success: true,
             message: 'Session updated successfully'
@@ -225,6 +237,10 @@ const completeSession = async (req, res) => {
             });
         }
         
+        if (req.app.get('io')) {
+            req.app.get('io').emit('STOCK_OPNAME_UPDATED');
+        }
+        
         res.json({
             success: true,
             message: 'Session completed successfully'
@@ -251,6 +267,10 @@ const deleteSession = async (req, res) => {
                 success: false,
                 message: 'Session not found'
             });
+        }
+        
+        if (req.app.get('io')) {
+            req.app.get('io').emit('STOCK_OPNAME_UPDATED');
         }
         
         res.json({
@@ -310,6 +330,100 @@ const getStatistics = async (req, res) => {
     }
 };
 
+// Export all scanned items (no pagination) for Excel export
+const exportAllScannedItems = async (req, res) => {
+    try {
+        const search = req.query.search || '';
+
+        // Build search condition
+        let searchCondition = '';
+        let searchParams = [];
+
+        if (search && search.trim() !== '') {
+            searchCondition = `
+                WHERE i.barcode LIKE ? 
+                OR i.title LIKE ? 
+                OR s.pic_name LIKE ?
+            `;
+            const searchPattern = `%${search.trim()}%`;
+            searchParams = [searchPattern, searchPattern, searchPattern];
+        }
+
+        // Get ALL items without LIMIT
+        const query = `
+            SELECT 
+                i.id,
+                i.barcode,
+                i.title,
+                i.author,
+                i.call_number as callNumber,
+                i.year,
+                i.type_procurement as typeProcurement,
+                i.source,
+                i.location,
+                i.status_buku as statusBuku,
+                i.has_warning as hasWarning,
+                i.warning_types as warningTypes,
+                i.forced_add as forcedAdd,
+                i.scanned_at as scannedAt,
+                s.id as sessionId,
+                s.pic_name as picName,
+                s.status as sessionStatus
+            FROM stock_opname_items i
+            JOIN stock_opname_sessions s ON i.session_id = s.id
+            ${searchCondition}
+            ORDER BY i.scanned_at DESC
+        `;
+
+        const { dbApp } = require('../config/database');
+        const [items] = await dbApp.query(query, searchParams);
+
+        // Parse JSON fields safely
+        items.forEach(item => {
+            try {
+                item.warningTypes = typeof item.warningTypes === 'string'
+                    ? JSON.parse(item.warningTypes || '[]')
+                    : (item.warningTypes || []);
+            } catch (error) {
+                item.warningTypes = [];
+            }
+        });
+
+        res.json({
+            success: true,
+            data: items,
+            total: items.length
+        });
+    } catch (error) {
+        console.error('Error exporting scanned items:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to export scanned items',
+            error: error.message
+        });
+    }
+};
+
+// Get location stats from scanned items
+const getLocationStats = async (req, res) => {
+    try {
+        const stats = await stockOpnameService.getLocationStats();
+        
+        res.json({
+            success: true,
+            data: stats
+        });
+    } catch (error) {
+        console.error('Error getting location stats:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to get location stats',
+            error: error.message
+        });
+    }
+};
+
+
 module.exports = {
     createSession,
     checkDuplicate,
@@ -320,5 +434,7 @@ module.exports = {
     completeSession,
     deleteSession,
     getAllScannedItems,
-    getStatistics
+    exportAllScannedItems,
+    getStatistics,
+    getLocationStats
 };

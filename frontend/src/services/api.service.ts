@@ -66,7 +66,20 @@ async function apiFetch<T>(
       },
     });
 
-    const data = await response.json();
+    const text = await response.text();
+    
+    // Try to parse as JSON
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      console.error(`API response is not JSON (status ${response.status}):`, text.substring(0, 200));
+      return {
+        success: false,
+        message: `Server error (${response.status}): Backend mungkin tidak berjalan`,
+      };
+    }
+
     return data;
   } catch (error) {
     console.error('API Error:', error);

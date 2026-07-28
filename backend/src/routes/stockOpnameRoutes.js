@@ -15,9 +15,11 @@ router.get('/check-duplicate/:barcode', stockOpnameController.checkDuplicate);
 
 // Item routes
 router.post('/sessions/:sessionId/items', stockOpnameController.addItemToSession);
+router.get('/items/export', stockOpnameController.exportAllScannedItems);
 router.get('/items', stockOpnameController.getAllScannedItems);
 
 // Statistics route
 router.get('/statistics', stockOpnameController.getStatistics);
+router.get('/location-stats', stockOpnameController.getLocationStats);
 
 module.exports = router;

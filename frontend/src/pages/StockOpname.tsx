@@ -289,7 +289,8 @@ const StockOpname = () => {
           </div>
         ) : (
           <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl overflow-hidden">
-            <div className="overflow-x-auto">
+            {/* Desktop Table - hidden on mobile */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-slate-700/50">
                   <tr>
@@ -426,6 +427,109 @@ const StockOpname = () => {
                   ))}
                 </tbody>
               </table>
+            </div>
+
+            {/* Mobile Card View - shown only on mobile */}
+            <div className="md:hidden divide-y divide-slate-700">
+              {filteredSessions.map((session) => (
+                <div
+                  key={session.id}
+                  className="p-4 hover:bg-slate-700/20 transition-colors duration-200"
+                >
+                  {/* Header: PIC + Status */}
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white font-bold text-sm">
+                        {session.picName.split(' ').map(n => n[0]).join('')}
+                      </div>
+                      <div>
+                        <p className="text-white font-semibold text-sm">{session.picName}</p>
+                        <p className="text-slate-400 text-xs">Session #{session.id}</p>
+                      </div>
+                    </div>
+                    <span
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                        session.status === 'completed'
+                          ? 'bg-green-500/20 text-green-400 border border-green-500/50'
+                          : 'bg-blue-500/20 text-blue-400 border border-blue-500/50'
+                      }`}
+                    >
+                      {session.status === 'completed' ? (
+                        <>
+                          <CheckCircle className="w-3 h-3" />
+                          Selesai
+                        </>
+                      ) : (
+                        <>
+                          <Clock className="w-3 h-3" />
+                          Aktif
+                        </>
+                      )}
+                    </span>
+                  </div>
+
+                  {/* Info Grid */}
+                  <div className="grid grid-cols-2 gap-3 mb-3">
+                    <div className="flex items-center gap-2">
+                      <Calendar className="w-3.5 h-3.5 text-slate-500" />
+                      <div>
+                        <p className="text-white text-xs">
+                          {new Date(session.createdAt).toLocaleDateString('id-ID', {
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric'
+                          })}
+                        </p>
+                        <p className="text-slate-500 text-xs">
+                          {new Date(session.createdAt).toLocaleTimeString('id-ID', {
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Package className="w-3.5 h-3.5 text-slate-500" />
+                      <span className="text-white text-xs font-semibold">{session.totalItems}</span>
+                      <span className="text-slate-500 text-xs">buku</span>
+                    </div>
+                  </div>
+
+                  {/* Rooms */}
+                  <div className="flex flex-wrap gap-1 mb-3">
+                    {session.rooms.map((room, idx) => (
+                      <span
+                        key={idx}
+                        className="px-2 py-0.5 bg-slate-700/50 border border-slate-600 rounded text-xs text-slate-300"
+                      >
+                        {room}
+                      </span>
+                    ))}
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => fetchSessionDetails(session.id)}
+                      className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-white text-sm font-medium transition-colors text-center"
+                    >
+                      Detail
+                    </button>
+                    {session.status === 'active' && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate('/stock-opname/scan', { state: { sessionId: session.id } });
+                        }}
+                        className="flex-1 px-3 py-2 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 rounded-lg text-white text-sm font-medium transition-colors flex items-center justify-center gap-1"
+                      >
+                        <ScanLine className="w-4 h-4" />
+                        Lanjutkan
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}

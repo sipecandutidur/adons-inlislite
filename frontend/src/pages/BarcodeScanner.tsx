@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ScanLine, CheckCircle, AlertCircle, Keyboard, ArrowLeft, XCircle, User, AlertTriangle } from 'lucide-react';
+import { ScanLine, CheckCircle, AlertCircle, Keyboard, ArrowLeft, XCircle, X, User, AlertTriangle, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Camera, CameraOff } from 'lucide-react';
+import { Html5Qrcode } from 'html5-qrcode';
 import { apiService } from '../services/api.service';
 
 // Room prefix configuration
@@ -29,6 +30,12 @@ const BarcodeScanner = () => {
   const location = useLocation();
   const inputRef = useRef<HTMLInputElement>(null);
   const [manualInput, setManualInput] = useState('');
+  const [scanMode, setScanMode] = useState<'manual' | 'camera'>('manual');
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
+  const scannerContainerRef = useRef<HTMLDivElement>(null);
+  const isProcessingRef = useRef(false);
   const [isLoading, setIsLoading] = useState(false);
   const [locations, setLocations] = useState<string[]>([]);
   const [statusBukuList, setStatusBukuList] = useState<string[]>([]);
@@ -103,6 +110,31 @@ const BarcodeScanner = () => {
     hasWarning?: boolean;
     warningTypes?: string[];
   }>>([]);
+
+  // Toast notification state
+  const [toast, setToast] = useState<{
+    show: boolean;
+    title: string;
+    status: 'success' | 'error';
+  }>({ show: false, title: '', status: 'success' });
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto-dismiss toast after 1 second
+  useEffect(() => {
+    if (toast.show) {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => {
+        setToast(prev => ({ ...prev, show: false }));
+      }, 2500);
+    }
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, [toast.show, toast.title]);
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
 
   const fetchBookByBarcode = async (barcode: string) => {
     setIsLoading(true);
@@ -545,8 +577,15 @@ const BarcodeScanner = () => {
       warningTypes: warningTypes
     };
     
-    //console.log('➕ Adding scan to history:', newScan);
     setScanHistory([newScan, ...scanHistory]);
+    setCurrentPage(1);
+    
+    // Show toast notification
+    setToast({
+      show: true,
+      title: result.title,
+      status: result.success ? 'success' : 'error'
+    });
     
     // Save to backend if successful
     if (result.success) {
@@ -579,8 +618,15 @@ const BarcodeScanner = () => {
     };
     
     setScanHistory([newScan, ...scanHistory]);
+    setCurrentPage(1);
     
-    // Save to backend with forced flag
+    // Show toast notification
+    setToast({
+      show: true,
+      title: bookData.title,
+      status: 'success'
+    });
+    
     await addItemToSession(bookData, errors, true);
     
     setValidationWarning({
@@ -602,10 +648,146 @@ const BarcodeScanner = () => {
     });
   };
 
-  // Auto-focus input on mount and after each scan
+  // Auto-focus input on mount and after each scan (only in manual mode)
   useEffect(() => {
-    inputRef.current?.focus();
-  }, [scanHistory]);
+    if (scanMode === 'manual') {
+      inputRef.current?.focus();
+    }
+  }, [scanHistory, scanMode]);
+
+
+  // Format barcode by padding with leading zeros to 11 digits
+  const formatBarcode = (input: string): string => {
+    // Remove any non-digit characters
+    const digitsOnly = input.replace(/\D/g, '');
+    
+    // Pad with leading zeros to make it 11 digits
+    const paddedBarcode = digitsOnly.padStart(11, '0');
+    
+    // console.log('Barcode formatting:', input, '->', paddedBarcode);
+    return paddedBarcode;
+  };
+
+  // Camera scanning functions
+  const stopCamera = useCallback(async () => {
+    try {
+      if (html5QrCodeRef.current) {
+        const state = html5QrCodeRef.current.getState();
+        // State 2 = SCANNING, State 3 = PAUSED
+        if (state === 2 || state === 3) {
+          await html5QrCodeRef.current.stop();
+        }
+        html5QrCodeRef.current.clear();
+        html5QrCodeRef.current = null;
+      }
+    } catch (err) {
+      console.error('Error stopping camera:', err);
+    }
+    setIsCameraActive(false);
+  }, []);
+
+  const startCamera = useCallback(async () => {
+    if (!scannerContainerRef.current) return;
+    
+    setCameraError(null);
+    
+    try {
+      // Clean up any existing instance
+      if (html5QrCodeRef.current) {
+        await stopCamera();
+      }
+
+      const html5QrCode = new Html5Qrcode('camera-scanner-region');
+      html5QrCodeRef.current = html5QrCode;
+
+      await html5QrCode.start(
+        { facingMode: 'environment' }, // Use rear camera
+        {
+          fps: 10,
+          qrbox: { width: 280, height: 150 },
+          aspectRatio: 1.0,
+        },
+        async (decodedText) => {
+          // Prevent processing multiple scans simultaneously
+          if (isProcessingRef.current) return;
+          isProcessingRef.current = true;
+
+          // Format and process the barcode
+          const formattedBarcode = formatBarcode(decodedText);
+          
+          // Play a beep sound for feedback
+          try {
+            const audioCtx = new AudioContext();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            oscillator.frequency.value = 1200;
+            oscillator.type = 'sine';
+            gainNode.gain.value = 0.3;
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + 0.15);
+          } catch (_) {
+            // Audio not available, skip
+          }
+
+          await handleScanResult(formattedBarcode);
+          
+          // Add a cooldown before allowing the next scan
+          setTimeout(() => {
+            isProcessingRef.current = false;
+          }, 2000);
+        },
+        () => {
+          // QR code scan error (no code found in frame) - this is normal, ignore
+        }
+      );
+
+      setIsCameraActive(true);
+    } catch (err: any) {
+      console.error('Error starting camera:', err);
+      if (err?.toString().includes('NotAllowedError')) {
+        setCameraError('Izin kamera ditolak. Silakan izinkan akses kamera di pengaturan browser Anda.');
+      } else if (err?.toString().includes('NotFoundError')) {
+        setCameraError('Kamera tidak ditemukan pada perangkat ini.');
+      } else if (err?.toString().includes('NotSecureContext') || err?.toString().includes('secure origins')) {
+        setCameraError('Kamera memerlukan koneksi HTTPS. Pastikan mengakses via HTTPS.');
+      } else {
+        setCameraError(`Gagal mengakses kamera: ${err?.message || err}`);
+      }
+      setIsCameraActive(false);
+    }
+  }, [stopCamera, formatBarcode, handleScanResult]);
+
+  // Handle scan mode toggle
+  const toggleScanMode = useCallback(async () => {
+    if (scanMode === 'manual') {
+      setScanMode('camera');
+    } else {
+      await stopCamera();
+      setScanMode('manual');
+    }
+  }, [scanMode, stopCamera]);
+
+  // Start camera when switching to camera mode
+  useEffect(() => {
+    if (scanMode === 'camera' && isProfileSet) {
+      // Small delay to ensure the DOM element is rendered
+      const timer = setTimeout(() => {
+        startCamera();
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [scanMode, isProfileSet]);
+
+  // Cleanup camera on unmount
+  useEffect(() => {
+    return () => {
+      if (html5QrCodeRef.current) {
+        stopCamera();
+      }
+    };
+  }, [stopCamera]);
 
   // Fetch locations and status buku on mount
   useEffect(() => {
@@ -649,17 +831,7 @@ const BarcodeScanner = () => {
     }
   }, [location]);
 
-  // Format barcode by padding with leading zeros to 11 digits
-  const formatBarcode = (input: string): string => {
-    // Remove any non-digit characters
-    const digitsOnly = input.replace(/\D/g, '');
-    
-    // Pad with leading zeros to make it 11 digits
-    const paddedBarcode = digitsOnly.padStart(11, '0');
-    
-    // console.log('Barcode formatting:', input, '->', paddedBarcode);
-    return paddedBarcode;
-  };
+
 
   const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -674,6 +846,42 @@ const BarcodeScanner = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+      {/* Toast Notification */}
+      {toast.show && (
+        <div className="fixed top-4 right-4 left-4 sm:left-auto sm:w-96 z-[100] animate-toastSlideIn">
+          <div className={`flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl border backdrop-blur-sm ${
+            toast.status === 'success'
+              ? 'bg-green-500/15 border-green-500/40 shadow-green-500/10'
+              : 'bg-red-500/15 border-red-500/40 shadow-red-500/10'
+          }`}>
+            <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+              toast.status === 'success'
+                ? 'bg-green-500/25'
+                : 'bg-red-500/25'
+            }`}>
+              {toast.status === 'success' ? (
+                <CheckCircle className="w-5 h-5 text-green-400" />
+              ) : (
+                <AlertCircle className="w-5 h-5 text-red-400" />
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className={`text-xs font-semibold uppercase tracking-wide ${
+                toast.status === 'success' ? 'text-green-400' : 'text-red-400'
+              }`}>
+                {toast.status === 'success' ? 'Berhasil Discan' : 'Gagal'}
+              </p>
+              <p className="text-white text-sm font-medium truncate">{toast.title}</p>
+            </div>
+            <button
+              onClick={() => setToast(prev => ({ ...prev, show: false }))}
+              className="flex-shrink-0 text-slate-400 hover:text-white transition-colors p-1 rounded-lg hover:bg-white/10"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
         <div className="mb-8">
@@ -1139,7 +1347,87 @@ const BarcodeScanner = () => {
               </div>
             </div>
 
+            {/* Scan Mode Toggle */}
+            <div className="flex gap-2 mb-6">
+              <button
+                onClick={() => { if (scanMode !== 'manual') toggleScanMode(); }}
+                className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-semibold text-sm transition-all duration-300 ${
+                  scanMode === 'manual'
+                    ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-lg shadow-blue-500/30'
+                    : 'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-600'
+                }`}
+              >
+                <Keyboard className="w-5 h-5" />
+                Input Manual
+              </button>
+              <button
+                onClick={() => { if (scanMode !== 'camera') toggleScanMode(); }}
+                className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-semibold text-sm transition-all duration-300 ${
+                  scanMode === 'camera'
+                    ? 'bg-gradient-to-r from-green-600 to-emerald-600 text-white shadow-lg shadow-green-500/30'
+                    : 'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-600'
+                }`}
+              >
+                <Camera className="w-5 h-5" />
+                Scan Kamera
+              </button>
+            </div>
+
+            {/* Camera Scanner */}
+            {scanMode === 'camera' && (
+              <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-6 mb-6">
+                <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                  <Camera className="w-6 h-6 text-green-400" />
+                  Scan via Kamera
+                  {isCameraActive && (
+                    <span className="ml-auto flex items-center gap-1.5 text-xs font-medium text-green-400 bg-green-500/15 px-3 py-1 rounded-full">
+                      <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+                      Kamera Aktif
+                    </span>
+                  )}
+                </h2>
+
+                {cameraError ? (
+                  <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-4">
+                    <div className="flex items-start gap-3">
+                      <CameraOff className="w-6 h-6 text-red-400 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-red-400 font-semibold text-sm mb-1">Kamera Tidak Tersedia</p>
+                        <p className="text-red-300/80 text-sm">{cameraError}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setCameraError(null);
+                        startCamera();
+                      }}
+                      className="mt-3 px-4 py-2 bg-red-600/30 hover:bg-red-600/50 border border-red-500/30 rounded-lg text-red-300 text-sm font-medium transition-all"
+                    >
+                      Coba Lagi
+                    </button>
+                  </div>
+                ) : null}
+
+                <div ref={scannerContainerRef} className="relative overflow-hidden rounded-xl border-2 border-slate-600 bg-black">
+                  <div id="camera-scanner-region" className="w-full" />
+                  {!isCameraActive && !cameraError && (
+                    <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+                      <Camera className="w-16 h-16 mb-4 opacity-30" />
+                      <p className="text-sm">Memulai kamera...</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-4 bg-slate-700/30 rounded-lg p-3 border border-slate-600/50">
+                  <p className="text-slate-400 text-xs text-center">
+                    📱 Arahkan kamera ke barcode buku. Barcode akan otomatis terbaca.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Manual Barcode Input */}
+            {scanMode === 'manual' && (
         <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-6 mb-6">
           <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
             <Keyboard className="w-6 h-6 text-blue-400" />
@@ -1170,10 +1458,18 @@ const BarcodeScanner = () => {
             </button>
           </form>
         </div>
+            )}
 
         {/* Scan History */}
         <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-6">
-          <h2 className="text-xl font-bold text-white mb-4">Scan History</h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-white">Scan History</h2>
+            {scanHistory.length > 0 && (
+              <span className="text-slate-400 text-sm bg-slate-700/50 px-3 py-1 rounded-full">
+                Total: <span className="text-white font-semibold">{scanHistory.length}</span> item
+              </span>
+            )}
+          </div>
           
           {scanHistory.length === 0 ? (
             <div className="text-center py-8">
@@ -1181,104 +1477,218 @@ const BarcodeScanner = () => {
               <p className="text-slate-400">No scans yet. Start scanning to see results here.</p>
             </div>
           ) : (
-            <div className="space-y-4">
-              {scanHistory.map((scan, index) => (
-                <div
-                  key={index}
-                  className={`rounded-lg transition-colors duration-200 overflow-hidden ${
-                    scan.hasWarning 
-                      ? 'bg-yellow-500/10 hover:bg-yellow-500/20 border border-yellow-500/30' 
-                      : 'bg-slate-700/30 hover:bg-slate-700/50'
-                  }`}
-                >
-                  {/* Header Section */}
-                  <div className="flex items-start justify-between p-4 border-b border-slate-600/50">
-                    <div className="flex items-start gap-3 flex-1">
-                      {scan.status === 'success' ? (
-                        <CheckCircle className="w-6 h-6 text-green-400 flex-shrink-0 mt-1" />
-                      ) : (
-                        <AlertCircle className="w-6 h-6 text-red-400 flex-shrink-0 mt-1" />
-                      )}
-                      <div className="flex-1">
-                        <h3 className="text-white font-bold text-lg mb-1">{scan.title}</h3>
-                        {scan.author && (
-                          <p className="text-slate-300 text-sm mb-2">by {scan.author}</p>
-                        )}
-                        <div className="flex items-center gap-2 mb-2">
-                          {scan.call_number && (
-                            <span className="text-cyan-400 text-sm font-mono bg-cyan-500/10 px-2 py-1 rounded border border-cyan-500/30">
-                              📚 {scan.call_number}
-                            </span>
+            <>
+              <div className="space-y-4">
+                {(() => {
+                  const totalPages = Math.ceil(scanHistory.length / itemsPerPage);
+                  const safePage = Math.min(currentPage, totalPages);
+                  const startIndex = (safePage - 1) * itemsPerPage;
+                  const endIndex = startIndex + itemsPerPage;
+                  const currentItems = scanHistory.slice(startIndex, endIndex);
+
+                  return currentItems.map((scan, index) => (
+                    <div
+                      key={startIndex + index}
+                      className={`rounded-lg transition-colors duration-200 overflow-hidden ${
+                        scan.hasWarning 
+                          ? 'bg-yellow-500/10 hover:bg-yellow-500/20 border border-yellow-500/30' 
+                          : 'bg-slate-700/30 hover:bg-slate-700/50'
+                      }`}
+                    >
+                      {/* Row number badge */}
+                      <div className="flex items-center gap-2 px-4 pt-3">
+                        <span className="text-xs font-bold text-slate-500 bg-slate-700/60 px-2 py-0.5 rounded-full">
+                          #{startIndex + index + 1}
+                        </span>
+                      </div>
+                      {/* Header Section */}
+                      <div className="flex items-start justify-between p-4 border-b border-slate-600/50">
+                        <div className="flex items-start gap-3 flex-1">
+                          {scan.status === 'success' ? (
+                            <CheckCircle className="w-6 h-6 text-green-400 flex-shrink-0 mt-1" />
+                          ) : (
+                            <AlertCircle className="w-6 h-6 text-red-400 flex-shrink-0 mt-1" />
                           )}
-                          <span className="text-purple-400 text-sm font-mono bg-purple-500/10 px-2 py-1 rounded border border-purple-500/30">
-                            🔖 {scan.code}
+                          <div className="flex-1">
+                            <h3 className="text-white font-bold text-lg mb-1">{scan.title}</h3>
+                            {scan.author && (
+                              <p className="text-slate-300 text-sm mb-2">by {scan.author}</p>
+                            )}
+                            <div className="flex items-center gap-2 mb-2">
+                              {scan.call_number && (
+                                <span className="text-cyan-400 text-sm font-mono bg-cyan-500/10 px-2 py-1 rounded border border-cyan-500/30">
+                                  📚 {scan.call_number}
+                                </span>
+                              )}
+                              <span className="text-purple-400 text-sm font-mono bg-purple-500/10 px-2 py-1 rounded border border-purple-500/30">
+                                🔖 {scan.code}
+                              </span>
+                            </div>
+                          </div>
+                          <span className="text-slate-400 text-xs bg-slate-600/30 px-3 py-1 rounded-full">
+                            {scan.timestamp}
                           </span>
                         </div>
+                        {scan.hasWarning && scan.warningTypes && scan.warningTypes.length > 0 && (
+                          <div className="mx-4 mb-3 flex flex-wrap gap-2">
+                             {scan.warningTypes.map((type, idx) => (
+                               <span key={idx} className="flex items-center gap-1 px-2 py-1 bg-yellow-500/20 text-yellow-300 text-xs rounded border border-yellow-500/30 font-semibold">
+                                 <AlertTriangle className="w-3 h-3" />
+                                 {type === 'roomMismatch' ? 'Salah Ruangan' : 
+                                  type === 'classMismatch' ? 'Salah Kelas' : 
+                                  type === 'statusMismatch' ? 'Salah Status' : type}
+                               </span>
+                             ))}
+                          </div>
+                        )}
                       </div>
-                      <span className="text-slate-400 text-xs bg-slate-600/30 px-3 py-1 rounded-full">
-                        {scan.timestamp}
-                      </span>
+
+                      {/* Details Section */}
+                      {scan.status === 'success' && (
+                        <div className="p-4 bg-slate-800/30">
+                          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                            {scan.year && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-500 text-xs font-semibold uppercase">Year:</span>
+                                <span className="text-slate-300 text-sm">{scan.year}</span>
+                              </div>
+                            )}
+                            {scan.location && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-500 text-xs font-semibold uppercase">Location:</span>
+                                <span className="text-slate-300 text-sm">{scan.location}</span>
+                              </div>
+                            )}
+                            {scan.status_buku && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-500 text-xs font-semibold uppercase">Status:</span>
+                                <span className={`text-sm px-2 py-0.5 rounded ${
+                                  scan.status_buku.toLowerCase().includes('available') || scan.status_buku.toLowerCase().includes('tersedia')
+                                    ? 'bg-green-500/20 text-green-400'
+                                    : 'bg-slate-500/20 text-slate-300'
+                                }`}>
+                                  {scan.status_buku}
+                                </span>
+                              </div>
+                            )}
+                            {scan.type_procurement && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-500 text-xs font-semibold uppercase">Procurement:</span>
+                                <span className="text-slate-300 text-sm">{scan.type_procurement}</span>
+                              </div>
+                            )}
+                            {scan.source && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-500 text-xs font-semibold uppercase">Source:</span>
+                                <span className="text-slate-300 text-sm">{scan.source}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    {scan.hasWarning && scan.warningTypes && scan.warningTypes.length > 0 && (
-                      <div className="mx-4 mb-3 flex flex-wrap gap-2">
-                         {scan.warningTypes.map((type, idx) => (
-                           <span key={idx} className="flex items-center gap-1 px-2 py-1 bg-yellow-500/20 text-yellow-300 text-xs rounded border border-yellow-500/30 font-semibold">
-                             <AlertTriangle className="w-3 h-3" />
-                             {type === 'roomMismatch' ? 'Salah Ruangan' : 
-                              type === 'classMismatch' ? 'Salah Kelas' : 
-                              type === 'statusMismatch' ? 'Salah Status' : type}
-                           </span>
-                         ))}
-                      </div>
-                    )}
+                  ));
+                })()}
+              </div>
+
+              {/* Pagination Controls */}
+              {scanHistory.length > itemsPerPage && (
+                <div className="mt-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+                  {/* Page info */}
+                  <div className="text-slate-400 text-sm">
+                    Menampilkan{' '}
+                    <span className="text-white font-semibold">
+                      {((Math.min(currentPage, Math.ceil(scanHistory.length / itemsPerPage)) - 1) * itemsPerPage) + 1}
+                    </span>
+                    {' '}-{' '}
+                    <span className="text-white font-semibold">
+                      {Math.min(Math.min(currentPage, Math.ceil(scanHistory.length / itemsPerPage)) * itemsPerPage, scanHistory.length)}
+                    </span>
+                    {' '}dari{' '}
+                    <span className="text-white font-semibold">{scanHistory.length}</span> item
                   </div>
 
-                  {/* Details Section */}
-                  {scan.status === 'success' && (
-                    <div className="p-4 bg-slate-800/30">
-                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                        {scan.year && (
-                          <div className="flex items-center gap-2">
-                            <span className="text-slate-500 text-xs font-semibold uppercase">Year:</span>
-                            <span className="text-slate-300 text-sm">{scan.year}</span>
-                          </div>
-                        )}
-                        {scan.location && (
-                          <div className="flex items-center gap-2">
-                            <span className="text-slate-500 text-xs font-semibold uppercase">Location:</span>
-                            <span className="text-slate-300 text-sm">{scan.location}</span>
-                          </div>
-                        )}
-                        {scan.status_buku && (
-                          <div className="flex items-center gap-2">
-                            <span className="text-slate-500 text-xs font-semibold uppercase">Status:</span>
-                            <span className={`text-sm px-2 py-0.5 rounded ${
-                              scan.status_buku.toLowerCase().includes('available') || scan.status_buku.toLowerCase().includes('tersedia')
-                                ? 'bg-green-500/20 text-green-400'
-                                : 'bg-slate-500/20 text-slate-300'
-                            }`}>
-                              {scan.status_buku}
-                            </span>
-                          </div>
-                        )}
-                        {scan.type_procurement && (
-                          <div className="flex items-center gap-2">
-                            <span className="text-slate-500 text-xs font-semibold uppercase">Procurement:</span>
-                            <span className="text-slate-300 text-sm">{scan.type_procurement}</span>
-                          </div>
-                        )}
-                        {scan.source && (
-                          <div className="flex items-center gap-2">
-                            <span className="text-slate-500 text-xs font-semibold uppercase">Source:</span>
-                            <span className="text-slate-300 text-sm">{scan.source}</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
+                  {/* Navigation buttons */}
+                  <div className="flex items-center gap-1">
+                    {/* First page */}
+                    <button
+                      onClick={() => setCurrentPage(1)}
+                      disabled={currentPage <= 1}
+                      className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700/50 transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-400"
+                      title="Halaman pertama"
+                    >
+                      <ChevronsLeft className="w-5 h-5" />
+                    </button>
+                    {/* Previous page */}
+                    <button
+                      onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                      disabled={currentPage <= 1}
+                      className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700/50 transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-400"
+                      title="Halaman sebelumnya"
+                    >
+                      <ChevronLeft className="w-5 h-5" />
+                    </button>
+
+                    {/* Page numbers */}
+                    {(() => {
+                      const totalPages = Math.ceil(scanHistory.length / itemsPerPage);
+                      const pages: (number | string)[] = [];
+                      
+                      if (totalPages <= 7) {
+                        for (let i = 1; i <= totalPages; i++) pages.push(i);
+                      } else {
+                        pages.push(1);
+                        if (currentPage > 3) pages.push('...');
+                        
+                        const start = Math.max(2, currentPage - 1);
+                        const end = Math.min(totalPages - 1, currentPage + 1);
+                        for (let i = start; i <= end; i++) pages.push(i);
+                        
+                        if (currentPage < totalPages - 2) pages.push('...');
+                        pages.push(totalPages);
+                      }
+
+                      return pages.map((page, idx) => (
+                        typeof page === 'string' ? (
+                          <span key={`ellipsis-${idx}`} className="px-2 text-slate-500 text-sm select-none">...</span>
+                        ) : (
+                          <button
+                            key={page}
+                            onClick={() => setCurrentPage(page)}
+                            className={`min-w-[36px] h-9 rounded-lg text-sm font-semibold transition-all duration-200 ${
+                              currentPage === page
+                                ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-lg shadow-blue-500/30'
+                                : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
+                            }`}
+                          >
+                            {page}
+                          </button>
+                        )
+                      ));
+                    })()}
+
+                    {/* Next page */}
+                    <button
+                      onClick={() => setCurrentPage(prev => Math.min(prev + 1, Math.ceil(scanHistory.length / itemsPerPage)))}
+                      disabled={currentPage >= Math.ceil(scanHistory.length / itemsPerPage)}
+                      className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700/50 transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-400"
+                      title="Halaman berikutnya"
+                    >
+                      <ChevronRight className="w-5 h-5" />
+                    </button>
+                    {/* Last page */}
+                    <button
+                      onClick={() => setCurrentPage(Math.ceil(scanHistory.length / itemsPerPage))}
+                      disabled={currentPage >= Math.ceil(scanHistory.length / itemsPerPage)}
+                      className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700/50 transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-400"
+                      title="Halaman terakhir"
+                    >
+                      <ChevronsRight className="w-5 h-5" />
+                    </button>
+                  </div>
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
         </div>
           </>
@@ -1327,6 +1737,44 @@ const BarcodeScanner = () => {
         }
         .animate-fadeIn {
           animation: fadeIn 0.2s ease-in-out;
+        }
+
+        @keyframes toastSlideIn {
+          from {
+            opacity: 0;
+            transform: translateY(-1rem);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        .animate-toastSlideIn {
+          animation: toastSlideIn 0.25s ease-out;
+        }
+
+        /* html5-qrcode scanner styling */
+        #camera-scanner-region {
+          border: none !important;
+        }
+        #camera-scanner-region video {
+          border-radius: 0.75rem !important;
+          object-fit: cover !important;
+        }
+        #camera-scanner-region img[alt="Info icon"] {
+          display: none !important;
+        }
+        #camera-scanner-region > div > div {
+          border-color: rgba(34, 211, 238, 0.6) !important;
+          border-radius: 8px !important;
+        }
+        #html5-qrcode-anchor-scan-type-change,
+        #html5-qrcode-button-camera-permission,
+        #html5-qrcode-button-camera-stop {
+          display: none !important;
+        }
+        #camera-scanner-region select {
+          display: none !important;
         }
       `}</style>
     </div>

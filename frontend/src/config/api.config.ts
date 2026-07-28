@@ -34,6 +34,11 @@ export const API_ENDPOINTS = {
     getAll: '/status-buku',
   },
   
+  // Collections endpoints
+  collections: {
+    locationStats: '/collections/location-stats',
+  },
+  
   // Member endpoints
   member: {
     getByNo: (queryNo: string) => `/members/${queryNo}`,
