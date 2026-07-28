@@ -2,8 +2,8 @@
 -- Template Import Database: alternative_inlislite
 -- Adons Inlislite - Backend Application
 -- ================================================================
--- File ini akan membuat database dan semua tabel yang dibutuhkan
--- oleh backend application. Jalankan file ini untuk setup awal.
+-- File ini akan membuat database, user, dan semua tabel
+-- yang dibutuhkan oleh backend application.
 -- ================================================================
 
 -- Buat database jika belum ada
@@ -12,6 +12,32 @@ CREATE DATABASE IF NOT EXISTS `alternative_inlislite`
   COLLATE utf8mb4_unicode_ci;
 
 USE `alternative_inlislite`;
+
+-- ================================================================
+-- SECURITY: Buat dedicated user untuk aplikasi (BUKAN root)
+-- User ini hanya punya akses ke database alternative_inlislite
+-- ================================================================
+
+-- Healthcheck user (tanpa password, hanya bisa ping)
+CREATE USER IF NOT EXISTS 'healthcheck'@'%' IDENTIFIED BY '';
+GRANT USAGE ON *.* TO 'healthcheck'@'%';
+
+-- Aplikasi user — hanya akses ke database ini
+-- Password diset via MYSQL_PASSWORD environment variable di docker-compose
+-- MySQL Docker image otomatis membuat MYSQL_USER dengan MYSQL_PASSWORD
+-- dan memberikan ALL PRIVILEGES pada MYSQL_DATABASE
+
+-- Hapus akses root dari remote (hanya localhost)
+DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
+
+-- Hapus anonymous users
+DELETE FROM mysql.user WHERE User='';
+
+-- Hapus database test
+DROP DATABASE IF EXISTS test;
+DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+
+FLUSH PRIVILEGES;
 
 -- ================================================================
 -- 1. STOCK OPNAME SESSIONS

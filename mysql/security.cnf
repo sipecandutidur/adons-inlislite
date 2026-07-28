@@ -1,0 +1,32 @@
+# ==========================================
+# MySQL Security Hardening Configuration
+# ==========================================
+
+[mysqld]
+# Disable remote root login
+# Root hanya bisa akses dari localhost
+bind-address = 0.0.0.0
+
+# Disable LOAD DATA LOCAL untuk mencegah file read attacks
+local-infile = 0
+
+# Disable symbolic links untuk mencegah symlink attacks
+symbolic-links = 0
+
+# Log slow queries (untuk monitoring performa)
+slow-query-log = 1
+slow-query-log-file = /var/lib/mysql/slow-query.log
+long-query-time = 2
+
+# Error log
+log-error = /var/lib/mysql/error.log
+
+# Batasi ukuran packet
+max-allowed-packet = 16M
+
+# Secure file permissions
+secure-file-priv = /var/lib/mysql-files
+
+# Password policy
+# validate_password.policy = MEDIUM
+# validate_password.length = 8

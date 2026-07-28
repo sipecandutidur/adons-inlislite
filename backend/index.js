@@ -115,20 +115,29 @@ const path = require('path');
 const FRONTEND_DIST = process.env.FRONTEND_DIST_PATH 
     ? path.resolve(process.env.FRONTEND_DIST_PATH) 
     : path.join(__dirname, '../frontend/dist');
+const OPAC_DIST = process.env.OPAC_DIST_PATH 
+    ? path.resolve(process.env.OPAC_DIST_PATH) 
+    : path.join(__dirname, '../opac/dist');
 
+// Serve OPAC static files di /opac
+app.use('/opac', express.static(OPAC_DIST));
+
+// OPAC SPA catch-all (semua route /opac/* → /opac/index.html)
+app.get('/opac/*', (req, res) => {
+    res.sendFile(path.join(OPAC_DIST, 'index.html'));
+});
+
+// Serve Frontend (Admin Dashboard) static files
 app.use(express.static(FRONTEND_DIST));
 
-// Catch-all: serve frontend for non-API routes (SPA routing)
-app.get('{*path}', (req, res, next) => {
+// Catch-all: serve frontend for non-API, non-OPAC routes (SPA routing)
+app.get('*', (req, res, next) => {
     // Don't serve index.html for API routes — return proper 404
     if (req.path.startsWith('/api/')) {
         return res.status(404).json({ success: false, message: 'API endpoint not found' });
     }
     res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
 });
-// app.get('/', (req, res) => {
-//     res.send('Backend API is running');
-// });
 
 // Function to test database connections
 const testDbConnections = async () => {

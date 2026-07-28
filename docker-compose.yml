@@ -12,30 +12,41 @@ services:
   # ========================================
   # MySQL Database (App Database)
   # ========================================
+  # Data disimpan di HOST filesystem, BUKAN di dalam Docker.
+  # Jika container dihapus, data tetap aman di host.
+  # ========================================
   mysql:
     image: mysql:8.0
     container_name: adons-inlislite-db
     restart: always
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"  # Hanya bisa diakses dari localhost, bukan dari luar
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_APP_PASSWORD:-semak}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${DB_APP_NAME:-alternative_inlislite}
+      MYSQL_USER: ${DB_APP_USER:-adons_app}
+      MYSQL_PASSWORD: ${DB_APP_PASSWORD}
       TZ: Asia/Jakarta
     volumes:
-      - mysql_data:/var/lib/mysql
-      - ./init_database.sql:/docker-entrypoint-initdb.d/init_database.sql:ro
+      # Data MySQL disimpan di HOST filesystem
+      - ${MYSQL_DATA_PATH:-/var/lib/adons-inlislite/mysql}:/var/lib/mysql
+      - ./init_database.sql:/docker-entrypoint-initdb.d/01_init_database.sql:ro
+      - ./mysql/security.cnf:/etc/mysql/conf.d/security.cnf:ro
     command: >
-      --default-authentication-plugin=mysql_native_password
+      --default-authentication-plugin=caching_sha2_password
       --character-set-server=utf8mb4
       --collation-server=utf8mb4_unicode_ci
+      --skip-name-resolve
+      --max-connections=100
+      --innodb-buffer-pool-size=256M
     networks:
       - app-network
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_APP_PASSWORD:-semak}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "healthcheck", "--skip-password"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
   # ========================================
   # Backend (Node.js + Express)
@@ -46,17 +57,19 @@ services:
       dockerfile: backend/Dockerfile
     container_name: adons-inlislite-backend
     restart: always
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"    # Hanya expose ke internal Docker network, bukan ke host
     environment:
       PORT: 3000
       TZ: Asia/Jakarta
+      NODE_ENV: production
       FRONTEND_DIST_PATH: /app/public
-      # App Database
+      OPAC_DIST_PATH: /app/public-opac
+      # App Database — menggunakan dedicated user, BUKAN root
       DB_APP_HOST: mysql
       DB_APP_PORT: 3306
-      DB_APP_USER: root
-      DB_APP_PASSWORD: ${DB_APP_PASSWORD:-semak}
+      DB_APP_USER: ${DB_APP_USER:-adons_app}
+      DB_APP_PASSWORD: ${DB_APP_PASSWORD}
       DB_APP_NAME: ${DB_APP_NAME:-alternative_inlislite}
       # Inlislite Database (jaringan lokal)
       DB_INLISLITE_HOST: ${DB_INLISLITE_HOST:-192.168.35.8}
@@ -91,10 +104,6 @@ services:
       - backend
     networks:
       - app-network
-
-volumes:
-  mysql_data:
-    driver: local
 
 networks:
   app-network:
